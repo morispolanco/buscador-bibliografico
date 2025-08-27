@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 from urllib.parse import urlencode
 import re
+import time
 
 # Función para generar cita en formato APA
 def format_apa_citation(title, authors, year, journal, doi, url):
@@ -45,74 +46,93 @@ def format_apa_citation(title, authors, year, journal, doi, url):
     
     return ' '.join(citation_parts)
 
-# Función para consultar la API CrossRef
-def query_crossref(query, rows=10):
+# Función para consultar la API CrossRef con reintentos
+def query_crossref(query, rows=10, max_retries=3):
     base_url = 'https://api.crossref.org/works'
     params = {
         'query.bibliographic': query,
         'rows': rows,
         'filter': 'has-full-text:true'
     }
-    try:
-        response = requests.get(base_url, params=params, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        items = data.get('message', {}).get('items', [])
-        results = []
-        for item in items:
-            title_list = item.get('title', [])
-            title = title_list[0] if title_list else ''
+    
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(
+                base_url, 
+                params=params, 
+                timeout=15,  # Aumentamos el timeout a 15 segundos
+                headers={'User-Agent': 'AcademicSearchApp/1.0 (mailto:your-email@example.com)'}
+            )
+            response.raise_for_status()
+            data = response.json()
+            items = data.get('message', {}).get('items', [])
+            results = []
             
-            # Procesar autores
-            authors = []
-            for author in item.get('author', []):
-                given = author.get('given', '').strip()
-                family = author.get('family', '').strip()
-                if family and given:
-                    authors.append(f'{given} {family}')
-                elif family:
-                    authors.append(family)
-                elif given:
-                    authors.append(given)
+            for item in items:
+                title_list = item.get('title', [])
+                title = title_list[0] if title_list else ''
+                
+                # Procesar autores
+                authors = []
+                for author in item.get('author', []):
+                    given = author.get('given', '').strip()
+                    family = author.get('family', '').strip()
+                    if family and given:
+                        authors.append(f'{given} {family}')
+                    elif family:
+                        authors.append(family)
+                    elif given:
+                        authors.append(given)
+                
+                # Obtener año de publicación
+                year = None
+                published_dates = item.get('published-print', {}).get('date-parts', []) or \
+                                 item.get('published-online', {}).get('date-parts', [])
+                if published_dates:
+                    year = published_dates[0][0]
+                
+                # Obtener revista
+                journal = ''
+                container_titles = item.get('container-title', [])
+                if container_titles:
+                    journal = container_titles[0]
+                
+                doi = item.get('DOI', '')
+                
+                # Obtener URL (priorizar PDF)
+                url = ''
+                for link in item.get('link', []):
+                    if link.get('content-type') == 'application/pdf':
+                        url = link.get('URL', '')
+                        break
+                if not url:
+                    url = item.get('URL', '')
+                
+                citation = format_apa_citation(title, authors, year, journal, doi, url)
+                results.append({
+                    'title': title,
+                    'authors': authors,
+                    'year': year,
+                    'journal': journal,
+                    'doi': doi,
+                    'url': url,
+                    'citation': citation
+                })
+            return results
             
-            # Obtener año de publicación
-            year = None
-            published_dates = item.get('published-print', {}).get('date-parts', []) or \
-                             item.get('published-online', {}).get('date-parts', [])
-            if published_dates:
-                year = published_dates[0][0]
-            
-            # Obtener revista
-            journal = ''
-            container_titles = item.get('container-title', [])
-            if container_titles:
-                journal = container_titles[0]
-            
-            doi = item.get('DOI', '')
-            
-            # Obtener URL (priorizar PDF)
-            url = ''
-            for link in item.get('link', []):
-                if link.get('content-type') == 'application/pdf':
-                    url = link.get('URL', '')
-                    break
-            if not url:
-                url = item.get('URL', '')
-            
-            citation = format_apa_citation(title, authors, year, journal, doi, url)
-            results.append({
-                'title': title,
-                'authors': authors,
-                'year': year,
-                'journal': journal,
-                'doi': doi,
-                'url': url,
-                'citation': citation
-            })
-        return results
-    except requests.exceptions.RequestException as e:
-        st.error(f'Error al consultar la base de datos: {e}')
-        return []
+        except requests.exceptions.Timeout:
+            if attempt < max_retries - 1:
+                st.warning(f"Intento {attempt + 1} fallido. Reintentando en 2 segundos...")
+                time.sleep(2)
+                continue
+            else:
+                st.error("La consulta está tardando demasiado. Por favor, intenta con una búsqueda más específica.")
+                return []
+        except requests.exceptions.RequestException as e:
+            st.error(f'Error al consultar la base de datos: {e}')
+            return []
+    
+    return []
 
 # Streamlit app
 def main():
