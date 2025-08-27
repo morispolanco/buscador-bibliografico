@@ -1,6 +1,6 @@
 import streamlit as st
 import requests
-from urllib.parse import urlencode
+from urllib.parse import quote
 import re
 import time
 
@@ -46,11 +46,41 @@ def format_apa_citation(title, authors, year, journal, doi, url):
     
     return ' '.join(citation_parts)
 
+# Función para procesar la consulta y manejar frases entre comillas
+def process_query(query):
+    # Expresión regular para encontrar frases entre comillas
+    quoted_phrases = re.findall(r'"([^"]*)"', query)
+    
+    # Reemplazar las frases entre comillas con marcadores temporales
+    temp_query = re.sub(r'"[^"]*"', '###PHRASE###', query)
+    
+    # Dividir el resto en palabras individuales
+    words = re.findall(r'\b\w+\b', temp_query)
+    
+    # Reconstruir la consulta procesada
+    processed_terms = []
+    phrase_index = 0
+    
+    for term in re.split(r'(\s+)', query):
+        if term.strip() == '###PHRASE###':
+            if phrase_index < len(quoted_phrases):
+                processed_terms.append(f'"{quoted_phrases[phrase_index]}"')
+                phrase_index += 1
+        elif term.strip():
+            # Agregar palabras individuales
+            processed_terms.extend(re.findall(r'\b\w+\b', term))
+    
+    # Unir todos los términos con AND
+    return ' AND '.join(processed_terms)
+
 # Función para consultar la API CrossRef con reintentos
 def query_crossref(query, rows=10, max_retries=3):
+    # Procesar la consulta para manejar frases entre comillas
+    processed_query = process_query(query)
+    
     base_url = 'https://api.crossref.org/works'
     params = {
-        'query.bibliographic': query,
+        'query': processed_query,  # Usamos 'query' en lugar de 'query.bibliographic'
         'rows': rows,
         'filter': 'has-full-text:true'
     }
@@ -60,7 +90,7 @@ def query_crossref(query, rows=10, max_retries=3):
             response = requests.get(
                 base_url, 
                 params=params, 
-                timeout=15,  # Aumentamos el timeout a 15 segundos
+                timeout=15,
                 headers={'User-Agent': 'AcademicSearchApp/1.0 (mailto:your-email@example.com)'}
             )
             response.raise_for_status()
@@ -140,6 +170,11 @@ def main():
     st.markdown('''
     Esta aplicación te ayuda a encontrar recursos bibliográficos académicos disponibles públicamente para tu tema de investigación. 
     Busca en bases de datos similares a Google Scholar y muestra citas en formato APA con enlaces a los documentos.
+    
+    **Consejos de búsqueda:**
+    - Usa comillas para frases exactas: `"machine learning"`
+    - Puedes combinar frases exactas y palabras sueltas: `"machine learning" deep`
+    - Las frases entre comillas se buscarán literalmente
     ''')
     
     query = st.text_input('Introduce el tema o palabras clave de tu investigación:', '')
