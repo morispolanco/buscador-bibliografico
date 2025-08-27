@@ -19,34 +19,33 @@ def format_apa_citation(title, authors, year, journal, doi, url):
                 authors_formatted.append(f'{last_name}, {initials}')
             else:
                 authors_formatted.append(author)
-
         if len(authors_formatted) == 1:
             authors_str = authors_formatted[0]
         elif len(authors_formatted) <= 7:
             authors_str = ', '.join(authors_formatted[:-1]) + ', & ' + authors_formatted[-1]
         else:
             authors_str = ', '.join(authors_formatted[:6]) + ', ... ' + authors_formatted[-1]
-
+    
     # Construir la cita APA
-    citation = ''
+    citation_parts = []
     if authors_str:
-        citation += f'{authors_str} '
+        citation_parts.append(authors_str)
     if year:
-        citation += f'({year}). '
+        citation_parts.append(f'({year}).')
     if title:
-        citation += f'{title}. '
+        citation_parts.append(title + '.')
     if journal:
-        citation += f'{journal}. '
+        citation_parts.append(journal + '.')
+    
+    # Agregar DOI o URL
     if doi:
-        citation += f'https://doi.org/{doi}'
+        citation_parts.append(f'https://doi.org/{doi}')
     elif url:
-        citation += url
-
-    return citation.strip()
+        citation_parts.append(url)
+    
+    return ' '.join(citation_parts)
 
 # Función para consultar la API CrossRef
-# CrossRef es una fuente confiable para metadatos de artículos académicos
-
 def query_crossref(query, rows=10):
     base_url = 'https://api.crossref.org/works'
     params = {
@@ -63,46 +62,51 @@ def query_crossref(query, rows=10):
         for item in items:
             title_list = item.get('title', [])
             title = title_list[0] if title_list else ''
+            
+            # Procesar autores
             authors = []
             for author in item.get('author', []):
                 given = author.get('given', '').strip()
                 family = author.get('family', '').strip()
-                if given and family:
+                if family and given:
                     authors.append(f'{given} {family}')
                 elif family:
                     authors.append(family)
                 elif given:
                     authors.append(given)
+            
+            # Obtener año de publicación
             year = None
-            if 'published-print' in item and 'date-parts' in item['published-print']:
-                year = item['published-print']['date-parts'][0][0]
-            elif 'published-online' in item and 'date-parts' in item['published-online']:
-                year = item['published-online']['date-parts'][0][0]
+            published_dates = item.get('published-print', {}).get('date-parts', []) or \
+                             item.get('published-online', {}).get('date-parts', [])
+            if published_dates:
+                year = published_dates[0][0]
+            
+            # Obtener revista
             journal = ''
-            if 'container-title' in item and item['container-title']:
-                journal = item['container-title'][0]
+            container_titles = item.get('container-title', [])
+            if container_titles:
+                journal = container_titles[0]
+            
             doi = item.get('DOI', '')
+            
+            # Obtener URL (priorizar PDF)
             url = ''
-            # Priorizar enlace a PDF si disponible
-            link = ''
-            if 'link' in item:
-                for l in item['link']:
-                    if l.get('content-type', '') == 'application/pdf':
-                        link = l.get('URL', '')
-                        break
-                if not link:
-                    link = item.get('URL', '')
-            else:
-                link = item.get('URL', '')
-
-            citation = format_apa_citation(title, authors, year, journal, doi, link)
+            for link in item.get('link', []):
+                if link.get('content-type') == 'application/pdf':
+                    url = link.get('URL', '')
+                    break
+            if not url:
+                url = item.get('URL', '')
+            
+            citation = format_apa_citation(title, authors, year, journal, doi, url)
             results.append({
                 'title': title,
                 'authors': authors,
                 'year': year,
                 'journal': journal,
                 'doi': doi,
-                'url': link,
+                'url': url,
                 'citation': citation
             })
         return results
@@ -110,20 +114,22 @@ def query_crossref(query, rows=10):
         st.error(f'Error al consultar la base de datos: {e}')
         return []
 
-
 # Streamlit app
-
 def main():
     st.title('Buscador bibliográfico')
     st.markdown('''
     Esta aplicación te ayuda a encontrar recursos bibliográficos académicos disponibles públicamente para tu tema de investigación. 
     Busca en bases de datos similares a Google Scholar y muestra citas en formato APA con enlaces a los documentos.
     ''')
-
+    
     query = st.text_input('Introduce el tema o palabras clave de tu investigación:', '')
     num_results = st.slider('Número de resultados a mostrar:', 1, 20, 10)
-
-    if st.button('Buscar') and query.strip():
+    
+    if st.button('Buscar'):
+        if not query.strip():
+            st.error('Por favor, ingresa un tema o palabras clave para buscar.')
+            return
+            
         with st.spinner('Buscando recursos...'):
             results = query_crossref(query, rows=num_results)
             if results:
@@ -142,8 +148,6 @@ def main():
                     st.markdown('---')
             else:
                 st.warning('No se encontraron recursos para la consulta proporcionada.')
-    elif st.button('Buscar') and not query.strip():
-        st.error('Por favor, ingresa un tema o palabras clave para buscar.')
 
 if __name__ == '__main__':
     main()
